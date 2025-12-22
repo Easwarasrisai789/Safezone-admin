@@ -24,9 +24,16 @@ import L from "leaflet";
 import { qrAgent } from "../rl/qrAgent";
 import "./UserHome.css";
 
-/* -----------------------------
-   FIX LEAFLET ICONS
------------------------------ */
+/* ICONS */
+import {
+  HiShieldCheck,
+  HiExclamationTriangle,
+  HiMapPin,
+} from "react-icons/hi2";
+import { MdMyLocation, MdFeedback } from "react-icons/md";
+import { FaRoute } from "react-icons/fa";
+
+/* FIX LEAFLET ICONS */
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl:
@@ -37,18 +44,16 @@ L.Icon.Default.mergeOptions({
     "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 });
 
-/* -----------------------------
-   DISTANCE IN METERS
------------------------------ */
+/* DISTANCE UTILS */
 const getDistanceMeters = (lat1, lon1, lat2, lon2) => {
   const R = 6371000;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
 
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) *
-      Math.cos(lat2 * Math.PI / 180) *
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
       Math.sin(dLon / 2) ** 2;
 
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
@@ -70,73 +75,52 @@ const UserHome = () => {
   const [inRisk, setInRisk] = useState(false);
   const [activeRiskZone, setActiveRiskZone] = useState(null);
 
-  /* FEEDBACK STATE */
   const [feedbackType, setFeedbackType] = useState("Issue");
   const [feedbackMsg, setFeedbackMsg] = useState("");
   const [sending, setSending] = useState(false);
 
-  /* ⏱️ LAST FIRESTORE UPDATE TIME */
+  const [tracking, setTracking] = useState(false);
+
+  const watchIdRef = useRef(null);
+  const intervalRef = useRef(null);
   const lastSentRef = useRef(0);
 
-  /* -----------------------------
-     FETCH ACTIVE RISK ZONES
-  ----------------------------- */
+  /* FETCH ZONES */
   useEffect(() => {
-    return onSnapshot(collection(db, "riskZones"), (snap) => {
+    const unsubRisk = onSnapshot(collection(db, "riskZones"), (snap) => {
       setRiskZones(
-        snap.docs
-          .map((d) => ({ id: d.id, ...d.data() }))
-          .filter((z) => z.active === true)
+        snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(z => z.active)
       );
     });
-  }, []);
 
-  /* -----------------------------
-     FETCH ACTIVE SAFE ZONES
-  ----------------------------- */
-  useEffect(() => {
-    return onSnapshot(collection(db, "safeZones"), (snap) => {
+    const unsubSafe = onSnapshot(collection(db, "safeZones"), (snap) => {
       setSafeZones(
-        snap.docs
-          .map((d) => ({ id: d.id, ...d.data() }))
-          .filter((z) => z.active === true)
+        snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(z => z.active)
       );
     });
+
+    return () => {
+      unsubRisk();
+      unsubSafe();
+    };
   }, []);
 
-  /* -----------------------------
-     LIVE LOCATION TRACKING (THROTTLED)
-  ----------------------------- */
-  useEffect(() => {
-    if (!navigator.geolocation || !auth.currentUser) return;
+  /* START LOCATION TRACKING */
+  const startLocationTracking = () => {
+    if (!navigator.geolocation) {
+      alert("Geolocation not supported");
+      return;
+    }
 
-    const uid = auth.currentUser.uid;
+    setTracking(true);
+    const uid = auth.currentUser?.uid || "guest";
 
-    const watchId = navigator.geolocation.watchPosition(
-      async (pos) => {
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
         const { latitude, longitude } = pos.coords;
+        const loc = { latitude, longitude };
+        setUserLoc(loc);
 
-        // ✅ UI updates instantly
-        setUserLoc({ latitude, longitude });
-
-        // ⏱️ Firestore update every 15 seconds
-        const now = Date.now();
-        if (now - lastSentRef.current >= 15000) {
-          lastSentRef.current = now;
-
-          await setDoc(
-            doc(db, "liveUsers", uid),
-            {
-              latitude,
-              longitude,
-              status: "ACTIVE",
-              updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-          );
-        }
-
-        // 🔴 Check risk zones
         let danger = false;
         let matchedZone = null;
 
@@ -157,24 +141,75 @@ const UserHome = () => {
         setInRisk(danger);
         setActiveRiskZone(matchedZone);
       },
-      console.error,
+      () => {
+        alert("Location permission denied");
+        setTracking(false);
+      },
       { enableHighAccuracy: true }
     );
 
-    return () => navigator.geolocation.clearWatch(watchId);
-  }, [riskZones]);
+    intervalRef.current = setInterval(async () => {
+      if (!userLoc) return;
+      const now = Date.now();
+      if (now - lastSentRef.current >= 15000) {
+        lastSentRef.current = now;
+        await setDoc(
+          doc(db, "liveUsers", uid),
+          {
+            latitude: userLoc.latitude,
+            longitude: userLoc.longitude,
+            status: "ACTIVE",
+            updatedAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+    }, 15000);
+  };
 
-  /* -----------------------------
-     SAFE ZONES FOR ACTIVE RISK
-  ----------------------------- */
-  const relatedSafeZones = safeZones.filter(
-    (s) => s.riskZoneId === activeRiskZone?.id
-  );
+  useEffect(() => {
+    return () => {
+      if (watchIdRef.current) navigator.geolocation.clearWatch(watchIdRef.current);
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, []);
 
-  /* -----------------------------
-     RL AGENT SELECTION
-  ----------------------------- */
-  const selectedSafeZone = qrAgent(userLoc, relatedSafeZones);
+  /* SAFE ZONE LOGIC */
+  const relatedSafeZones =
+    userLoc && activeRiskZone
+      ? safeZones.filter(
+          (s) =>
+            s.riskZoneId === activeRiskZone.id ||
+            getDistanceMeters(
+              userLoc.latitude,
+              userLoc.longitude,
+              s.latitude,
+              s.longitude
+            ) <= 5000
+        )
+      : [];
+
+  let selectedSafeZone = qrAgent(userLoc, relatedSafeZones);
+
+  if (!selectedSafeZone && userLoc && relatedSafeZones.length > 0) {
+    selectedSafeZone = relatedSafeZones.reduce((nearest, z) => {
+      const d1 = getDistanceMeters(
+        userLoc.latitude,
+        userLoc.longitude,
+        z.latitude,
+        z.longitude
+      );
+      const d2 = nearest
+        ? getDistanceMeters(
+            userLoc.latitude,
+            userLoc.longitude,
+            nearest.latitude,
+            nearest.longitude
+          )
+        : Infinity;
+      return d1 < d2 ? z : nearest;
+    }, null);
+  }
 
   const distanceToSafeZone =
     userLoc && selectedSafeZone
@@ -186,34 +221,21 @@ const UserHome = () => {
         )
       : null;
 
-  const lastUpdated = userLoc
-    ? new Date().toLocaleTimeString()
-    : "--";
+  const lastUpdated = userLoc ? new Date().toLocaleTimeString() : "--";
 
-  /* -----------------------------
-     SUBMIT FEEDBACK
-  ----------------------------- */
+  /* FEEDBACK */
   const submitFeedback = async () => {
-    if (!feedbackMsg.trim()) {
-      alert("Please enter your feedback");
-      return;
-    }
-
+    if (!feedbackMsg.trim()) return alert("Enter feedback");
     try {
       setSending(true);
-
       await addDoc(collection(db, "feedbackReports"), {
         uid: auth.currentUser?.uid || "anonymous",
         type: feedbackType,
         message: feedbackMsg,
         createdAt: serverTimestamp(),
       });
-
       setFeedbackMsg("");
-      alert("Thank you for your feedback 🙏");
-    } catch (err) {
-      console.error(err);
-      alert("Failed to submit feedback");
+      alert("Thank you for your feedback");
     } finally {
       setSending(false);
     }
@@ -225,27 +247,45 @@ const UserHome = () => {
 
       <main className="main-container">
         <div className="hero">
-          <h1 className="hero-title">🛡 Welcome to Safe Zone</h1>
+          <h1 className="hero-title">
+            <HiShieldCheck /> Safe Zone Monitoring
+          </h1>
           <p className="hero-text">
-            Live emergency monitoring and navigation assistance.
+            Live emergency monitoring and navigation assistance
           </p>
+
+          {!tracking && (
+            <button className="navigate-btn" onClick={startLocationTracking}>
+              <MdMyLocation /> Enable Location Access
+            </button>
+          )}
         </div>
 
-        {/* STATUS */}
         <div className="grid-2">
           <div className="card">
-            <h2 className="card-title">📍 Current Status</h2>
+            <h2 className="card-title">
+              <HiMapPin /> Current Status
+            </h2>
+
             {inRisk ? (
-              <div className="risk-alert">⚠ Inside Risk Zone</div>
+              <div className="risk-alert">
+                <HiExclamationTriangle /> Inside Risk Zone
+              </div>
             ) : (
-              <div className="safe-alert">✅ Safe Area</div>
+              <div className="safe-alert">
+                <HiShieldCheck /> Safe Area
+              </div>
             )}
+
             <p><b>Risk Zone:</b> {activeRiskZone?.name || "None"}</p>
             <p><b>Last Update:</b> {lastUpdated}</p>
           </div>
 
           <div className="card">
-            <h2 className="card-title">🟢 Nearest Safe Zone</h2>
+            <h2 className="card-title">
+              <HiShieldCheck /> Nearest Safe Zone
+            </h2>
+
             {selectedSafeZone ? (
               <>
                 <p><b>Distance:</b> {metersToText(distanceToSafeZone)}</p>
@@ -259,42 +299,38 @@ const UserHome = () => {
           </div>
         </div>
 
-        {/* MAP */}
-        {inRisk && userLoc && activeRiskZone && (
-          <div className="danger-card">
-            <h2 className="danger-title">🚨 DANGER ALERT</h2>
+        {tracking && inRisk && userLoc && activeRiskZone && (
+          <div className="card" style={{ marginTop: "40px" }}>
+            <h2 className="card-title">
+              <HiExclamationTriangle /> Danger Alert
+            </h2>
 
-            <div className="map-box">
-              <MapContainer
-                center={[userLoc.latitude, userLoc.longitude]}
-                zoom={14}
-                style={{ height: "340px", width: "100%" }}
-              >
-                <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+            <MapContainer
+              center={[userLoc.latitude, userLoc.longitude]}
+              zoom={14}
+              style={{ height: "340px", width: "100%" }}
+            >
+              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
 
+              <Circle
+                center={[activeRiskZone.latitude, activeRiskZone.longitude]}
+                radius={activeRiskZone.radius}
+                pathOptions={{ color: "red", fillOpacity: 0.25 }}
+              />
+
+              {relatedSafeZones.map((z) => (
                 <Circle
-                  center={[
-                    activeRiskZone.latitude,
-                    activeRiskZone.longitude,
-                  ]}
-                  radius={activeRiskZone.radius}
-                  pathOptions={{ color: "red", fillOpacity: 0.25 }}
+                  key={z.id}
+                  center={[z.latitude, z.longitude]}
+                  radius={z.radius}
+                  pathOptions={{ color: "green", fillOpacity: 0.35 }}
                 />
+              ))}
 
-                {relatedSafeZones.map((z) => (
-                  <Circle
-                    key={z.id}
-                    center={[z.latitude, z.longitude]}
-                    radius={z.radius}
-                    pathOptions={{ color: "green", fillOpacity: 0.35 }}
-                  />
-                ))}
-
-                <Marker position={[userLoc.latitude, userLoc.longitude]}>
-                  <Popup>You are here</Popup>
-                </Marker>
-              </MapContainer>
-            </div>
+              <Marker position={[userLoc.latitude, userLoc.longitude]}>
+                <Popup>You are here</Popup>
+              </Marker>
+            </MapContainer>
 
             {selectedSafeZone && (
               <button
@@ -305,23 +341,24 @@ const UserHome = () => {
                   )
                 }
               >
-                🧭 Start Emergency Navigation
+                <FaRoute /> Start Emergency Navigation
               </button>
             )}
           </div>
         )}
 
-        {/* FEEDBACK */}
         <div className="card" style={{ marginTop: "40px" }}>
-          <h2 className="card-title">📝 Feedback & Suggestions</h2>
+          <h2 className="card-title">
+            <MdFeedback /> Feedback & Suggestions
+          </h2>
 
           <select
             value={feedbackType}
             onChange={(e) => setFeedbackType(e.target.value)}
           >
-            <option value="Issue">⚠ Report an Issue</option>
-            <option value="Suggestion">💡 Suggest Improvement</option>
-            <option value="Experience">⭐ Share Experience</option>
+            <option value="Issue">Report an Issue</option>
+            <option value="Suggestion">Suggest Improvement</option>
+            <option value="Experience">Share Experience</option>
           </select>
 
           <textarea
@@ -342,6 +379,6 @@ const UserHome = () => {
       </main>
     </div>
   );
-};
+};   
 
 export default UserHome;
