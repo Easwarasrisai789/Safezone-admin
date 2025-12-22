@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import EmergencyNavbar from "../components/EmergencyNavbar";
 import { db, auth } from "../firebase";
@@ -75,6 +75,9 @@ const UserHome = () => {
   const [feedbackMsg, setFeedbackMsg] = useState("");
   const [sending, setSending] = useState(false);
 
+  /* ⏱️ LAST FIRESTORE UPDATE TIME */
+  const lastSentRef = useRef(0);
+
   /* -----------------------------
      FETCH ACTIVE RISK ZONES
   ----------------------------- */
@@ -102,7 +105,7 @@ const UserHome = () => {
   }, []);
 
   /* -----------------------------
-     LIVE LOCATION TRACKING
+     LIVE LOCATION TRACKING (THROTTLED)
   ----------------------------- */
   useEffect(() => {
     if (!navigator.geolocation || !auth.currentUser) return;
@@ -112,19 +115,28 @@ const UserHome = () => {
     const watchId = navigator.geolocation.watchPosition(
       async (pos) => {
         const { latitude, longitude } = pos.coords;
+
+        // ✅ UI updates instantly
         setUserLoc({ latitude, longitude });
 
-        await setDoc(
-          doc(db, "liveUsers", uid),
-          {
-            latitude,
-            longitude,
-            status: "ACTIVE",
-            updatedAt: serverTimestamp(),
-          },
-          { merge: true }
-        );
+        // ⏱️ Firestore update every 15 seconds
+        const now = Date.now();
+        if (now - lastSentRef.current >= 15000) {
+          lastSentRef.current = now;
 
+          await setDoc(
+            doc(db, "liveUsers", uid),
+            {
+              latitude,
+              longitude,
+              status: "ACTIVE",
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true }
+          );
+        }
+
+        // 🔴 Check risk zones
         let danger = false;
         let matchedZone = null;
 
@@ -146,7 +158,7 @@ const UserHome = () => {
         setActiveRiskZone(matchedZone);
       },
       console.error,
-      { enableHighAccuracy: true, timeout: 15000 }
+      { enableHighAccuracy: true }
     );
 
     return () => navigator.geolocation.clearWatch(watchId);
@@ -212,20 +224,14 @@ const UserHome = () => {
       <EmergencyNavbar />
 
       <main className="main-container">
-        {/* HERO */}
         <div className="hero">
           <h1 className="hero-title">🛡 Welcome to Safe Zone</h1>
           <p className="hero-text">
             Live emergency monitoring and navigation assistance.
           </p>
-
-          <div className="status-badge">
-            <span className="status-dot"></span>
-            Live Location Tracking Active
-          </div>
         </div>
 
-        {/* LIVE STATUS */}
+        {/* STATUS */}
         <div className="grid-2">
           <div className="card">
             <h2 className="card-title">📍 Current Status</h2>
@@ -242,9 +248,7 @@ const UserHome = () => {
             <h2 className="card-title">🟢 Nearest Safe Zone</h2>
             {selectedSafeZone ? (
               <>
-                <p>
-                  <b>Distance:</b> {metersToText(distanceToSafeZone)}
-                </p>
+                <p><b>Distance:</b> {metersToText(distanceToSafeZone)}</p>
                 <div className="safe-alert">
                   Follow navigation to reach safety
                 </div>
@@ -255,7 +259,7 @@ const UserHome = () => {
           </div>
         </div>
 
-        {/* MAP + NAVIGATION */}
+        {/* MAP */}
         {inRisk && userLoc && activeRiskZone && (
           <div className="danger-card">
             <h2 className="danger-title">🚨 DANGER ALERT</h2>
@@ -283,9 +287,7 @@ const UserHome = () => {
                     center={[z.latitude, z.longitude]}
                     radius={z.radius}
                     pathOptions={{ color: "green", fillOpacity: 0.35 }}
-                  >
-                    <Popup>Safe Zone</Popup>
-                  </Circle>
+                  />
                 ))}
 
                 <Marker position={[userLoc.latitude, userLoc.longitude]}>
@@ -316,13 +318,6 @@ const UserHome = () => {
           <select
             value={feedbackType}
             onChange={(e) => setFeedbackType(e.target.value)}
-            style={{
-              width: "100%",
-              padding: "12px",
-              borderRadius: "10px",
-              border: "1px solid #e5e7eb",
-              marginBottom: "12px",
-            }}
           >
             <option value="Issue">⚠ Report an Issue</option>
             <option value="Suggestion">💡 Suggest Improvement</option>
@@ -334,14 +329,6 @@ const UserHome = () => {
             onChange={(e) => setFeedbackMsg(e.target.value)}
             placeholder="Describe your feedback..."
             rows={4}
-            style={{
-              width: "100%",
-              padding: "14px",
-              borderRadius: "12px",
-              border: "1px solid #e5e7eb",
-              marginBottom: "14px",
-              resize: "none",
-            }}
           />
 
           <button
