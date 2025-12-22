@@ -1,24 +1,42 @@
-import logo from './logo.svg';
-import './App.css';
-
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import UserHome from "./pages/UserHome";
+import AdminLogin from "./pages/AdminLogin";
+import AdminDashboard from "./pages/AdminDashboard";
+import LiveUsers from "./pages/LiveUsers";
+import RiskZone from "./pages/RiskZone";
+import RiskZonesList from "./pages/RiskZonesList";
+import RiskZoneEffects from "./pages/RiskZoneEffects";
+import AddSafeZones from "./pages/AddSafeZones";
+import UsersZonesAlert from "./pages/UsersZonesAlert";
+import NavigateMap from "./pages/NavigateMap";
+import Reports from "./pages/Reports";
+import AddAdmin from "./pages/AddAdmin";
 function App() {
   return (
-    <div className="App">
-      <header className="App-header">
-        <img src={logo} className="App-logo" alt="logo" />
-        <p>
-          Edit <code>src/App.js</code> and save to reload.
-        </p>
-        <a
-          className="App-link"
-          href="https://reactjs.org"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          Learn React
-        </a>
-      </header>
-    </div>
+    <BrowserRouter>
+      <Routes>
+        {/* User Side */}
+        <Route path="/" element={<UserHome />} />
+
+        {/* Admin Side */}
+        <Route path="/admin/login" element={<AdminLogin />} />
+        <Route path="/admin/dashboard" element={<AdminDashboard />} />
+        <Route path="/admin/live-users" element={<LiveUsers />} />
+        <Route path="/admin/add-risk-zone" element={<RiskZone />} />
+        <Route path="/admin/risk-zones" element={<RiskZonesList />} />
+        <Route path="/admin/risk-zone-effects" element={<RiskZoneEffects />} />
+        <Route path="/admin/add-safe-zone" element={<AddSafeZones />} />
+        <Route path="/admin/UsersZonesAlert" element={<UsersZonesAlert />} />
+        <Route path="/navigate" element={<NavigateMap />} />
+        <Route path="/admin/Reports" element={<Reports />} />
+        <Route path="/admin/AddAdmin" element={<AddAdmin />} />
+
+        
+
+
+
+      </Routes>
+    </BrowserRouter>
   );
 }
 
